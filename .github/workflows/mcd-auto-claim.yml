@@ -1,0 +1,163 @@
+name: 麦当劳优惠券自动领取
+
+on:
+  # 每月1日北京时间 00:05 获取活动日历 (UTC 前一天 16:05)
+  schedule:
+    - cron: '5 16 1 * *'  # 每月1日
+    - cron: '5 16 * * *'  # 每天执行（检查是否有活动）
+  
+  # 支持手动触发
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: '运行模式'
+        required: true
+        default: 'full'
+        type: choice
+        options:
+          - calendar
+          - claim
+          - full
+
+# 设置权限
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+# 只允许一个并发部署
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  # 每月1日获取活动日历
+  fetch-calendar:
+    if: github.event.schedule == '5 16 1 * *' || (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'calendar')
+    runs-on: ubuntu-latest
+    outputs:
+      activity_dates: ${{ steps.calendar.outputs.dates }}
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+      
+      - name: 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: 获取活动日历
+        id: calendar
+        env:
+          MCD_TOKEN: ${{ secrets.MCD_TOKEN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GITHUB_PAGES_URL: ${{ vars.GITHUB_PAGES_URL }}
+        run: |
+          cd mcd-actions
+          python auto_claim.py --mode calendar
+          
+          # 读取日历数据并输出活动日期
+          if [ -f calendar_data.json ]; then
+            DATES=$(python -c "import json; data=json.load(open('calendar_data.json')); print(json.dumps([a['date'] for a in data.get('activities', [])]))")
+            echo "dates=$DATES" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: 保存日历数据
+        uses: actions/upload-artifact@v4
+        with:
+          name: calendar-data
+          path: mcd-actions/calendar_data.json
+          retention-days: 35
+
+  # 每天检查是否有活动并领券
+  auto-claim:
+    if: github.event.schedule == '5 16 * * *' || (github.event_name == 'workflow_dispatch' && (github.event.inputs.mode == 'claim' || github.event.inputs.mode == 'full'))
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+      
+      - name: 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: 下载日历数据
+        uses: actions/download-artifact@v4
+        with:
+          name: calendar-data
+          path: mcd-actions/
+        continue-on-error: true
+      
+      - name: 检查今天是否有活动
+        id: check
+        run: |
+          cd mcd-actions
+          TODAY=$(TZ='Asia/Shanghai' date +%Y-%m-%d)
+          echo "today=$TODAY"
+          
+          if [ -f calendar_data.json ]; then
+            # 检查今天是否在活动日期列表中
+            HAS_ACTIVITY=$(python -c "
+import json
+from datetime import datetime
+today = '$TODAY'
+try:
+    data = json.load(open('calendar_data.json'))
+    dates = [a['date'] for a in data.get('activities', [])]
+    print('true' if today in dates else 'false')
+except:
+    print('true')  # 如果无法读取，默认执行
+            ")
+            echo "has_activity=$HAS_ACTIVITY" >> $GITHUB_OUTPUT
+          else
+            echo "has_activity=true" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: 自动领取优惠券
+        if: steps.check.outputs.has_activity == 'true' || github.event_name == 'workflow_dispatch'
+        env:
+          MCD_TOKEN: ${{ secrets.MCD_TOKEN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GITHUB_PAGES_URL: ${{ vars.GITHUB_PAGES_URL }}
+        run: |
+          cd mcd-actions
+          MODE="${{ github.event.inputs.mode || 'claim' }}"
+          python auto_claim.py --mode $MODE
+      
+      - name: 上传报告
+        uses: actions/upload-artifact@v4
+        with:
+          name: report
+          path: mcd-actions/index.html
+          retention-days: 7
+      
+      - name: 准备 Pages 部署
+        if: steps.check.outputs.has_activity == 'true' || github.event_name == 'workflow_dispatch'
+        run: |
+          mkdir -p public
+          cp mcd-actions/index.html public/
+          if [ -f mcd-actions/calendar_data.json ]; then
+            cp mcd-actions/calendar_data.json public/
+          fi
+      
+      - name: 上传 Pages artifact
+        if: steps.check.outputs.has_activity == 'true' || github.event_name == 'workflow_dispatch'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  # 部署到 GitHub Pages
+  deploy-pages:
+    needs: auto-claim
+    if: always() && needs.auto-claim.result == 'success'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: 部署到 GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
