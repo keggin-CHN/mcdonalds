@@ -93,6 +93,41 @@ jobs:
       github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
+      - name: 删除旧的 artifacts
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            
+            // 获取所有 artifacts
+            const artifacts = await github.rest.actions.listArtifactsForRepo({
+              owner,
+              repo,
+              per_page: 100
+            });
+            
+            // 删除旧的 report 和 github-pages artifacts (保留最新的)
+            const toDelete = ['report', 'github-pages'];
+            let deletedCount = 0;
+            
+            for (const artifact of artifacts.data.artifacts) {
+              if (toDelete.includes(artifact.name)) {
+                try {
+                  await github.rest.actions.deleteArtifact({
+                    owner,
+                    repo,
+                    artifact_id: artifact.id
+                  });
+                  console.log(`Deleted artifact: ${artifact.name} (ID: ${artifact.id})`);
+                  deletedCount++;
+                } catch (e) {
+                  console.log(`Failed to delete ${artifact.name}: ${e.message}`);
+                }
+              }
+            }
+            
+            console.log(`Total deleted: ${deletedCount} artifacts`);
+      
       - name: 检出代码
         uses: actions/checkout@v4
       
