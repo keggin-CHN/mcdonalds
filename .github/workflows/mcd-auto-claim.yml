@@ -18,6 +18,14 @@ on:
           - calendar
           - claim
           - full
+  
+  # 支持 push 触发（用于测试）
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/mcd-auto-claim.yml'
+      - 'auto_claim.py'
 
 # 设置权限
 permissions:
@@ -46,6 +54,14 @@ jobs:
         with:
           python-version: '3.11'
       
+      - name: 检查 Token 配置
+        run: |
+          if [ -z "${{ secrets.MCD_TOKEN }}" ]; then
+            echo "::error::MCD_TOKEN secret 未配置！请在仓库 Settings > Secrets and variables > Actions 中添加"
+            exit 1
+          fi
+          echo "✓ MCD_TOKEN 已配置"
+      
       - name: 获取活动日历
         id: calendar
         env:
@@ -54,7 +70,6 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GITHUB_PAGES_URL: ${{ vars.GITHUB_PAGES_URL }}
         run: |
-          cd mcd-actions
           python auto_claim.py --mode calendar
           
           # 读取日历数据并输出活动日期
@@ -67,12 +82,15 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: calendar-data
-          path: mcd-actions/calendar_data.json
+          path: calendar_data.json
           retention-days: 35
 
   # 每天检查是否有活动并领券
   auto-claim:
-    if: github.event.schedule == '5 16 * * *' || (github.event_name == 'workflow_dispatch' && (github.event.inputs.mode == 'claim' || github.event.inputs.mode == 'full'))
+    if: |
+      github.event.schedule == '5 16 * * *' ||
+      (github.event_name == 'workflow_dispatch' && (github.event.inputs.mode == 'claim' || github.event.inputs.mode == 'full')) ||
+      github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - name: 检出代码
@@ -83,17 +101,33 @@ jobs:
         with:
           python-version: '3.11'
       
+      - name: 检查 Token 配置
+        run: |
+          if [ -z "${{ secrets.MCD_TOKEN }}" ]; then
+            echo "::error::MCD_TOKEN secret 未配置！"
+            echo "请在仓库 Settings > Secrets and variables > Actions > Secrets 中添加以下 secret："
+            echo "  - MCD_TOKEN: 麦当劳 MCP 认证令牌（必需）"
+            echo "  - TELEGRAM_BOT_TOKEN: Telegram 机器人令牌（可选，用于推送通知）"
+            echo "  - TELEGRAM_CHAT_ID: Telegram 聊天 ID（可选，用于推送通知）"
+            exit 1
+          fi
+          echo "✓ MCD_TOKEN 已配置"
+          if [ -n "${{ secrets.TELEGRAM_BOT_TOKEN }}" ]; then
+            echo "✓ TELEGRAM_BOT_TOKEN 已配置"
+          else
+            echo "⚠ TELEGRAM_BOT_TOKEN 未配置（可选）"
+          fi
+      
       - name: 下载日历数据
         uses: actions/download-artifact@v4
         with:
           name: calendar-data
-          path: mcd-actions/
+          path: ./
         continue-on-error: true
       
       - name: 检查今天是否有活动
         id: check
         run: |
-          cd mcd-actions
           TODAY=$(TZ='Asia/Shanghai' date +%Y-%m-%d)
           echo "today=$TODAY"
           
@@ -116,35 +150,43 @@ except:
           fi
       
       - name: 自动领取优惠券
-        if: steps.check.outputs.has_activity == 'true' || github.event_name == 'workflow_dispatch'
+        if: steps.check.outputs.has_activity == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'push'
         env:
           MCD_TOKEN: ${{ secrets.MCD_TOKEN }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GITHUB_PAGES_URL: ${{ vars.GITHUB_PAGES_URL }}
         run: |
-          cd mcd-actions
-          MODE="${{ github.event.inputs.mode || 'claim' }}"
+          MODE="${{ github.event.inputs.mode || 'full' }}"
+          echo "运行模式: $MODE"
           python auto_claim.py --mode $MODE
       
       - name: 上传报告
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: report
-          path: mcd-actions/index.html
+          path: index.html
           retention-days: 7
+          if-no-files-found: ignore
       
       - name: 准备 Pages 部署
-        if: steps.check.outputs.has_activity == 'true' || github.event_name == 'workflow_dispatch'
+        if: steps.check.outputs.has_activity == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'push'
         run: |
           mkdir -p public
-          cp mcd-actions/index.html public/
-          if [ -f mcd-actions/calendar_data.json ]; then
-            cp mcd-actions/calendar_data.json public/
+          if [ -f index.html ]; then
+            cp index.html public/
+          fi
+          if [ -f calendar_data.json ]; then
+            cp calendar_data.json public/
+          fi
+          # 确保 public 目录不为空
+          if [ ! -f public/index.html ]; then
+            echo "<html><body><h1>报告生成中...</h1></body></html>" > public/index.html
           fi
       
       - name: 上传 Pages artifact
-        if: steps.check.outputs.has_activity == 'true' || github.event_name == 'workflow_dispatch'
+        if: steps.check.outputs.has_activity == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'push'
         uses: actions/upload-pages-artifact@v3
         with:
           path: public
