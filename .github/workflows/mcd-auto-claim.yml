@@ -132,18 +132,7 @@ jobs:
           echo "today=$TODAY"
           
           if [ -f calendar_data.json ]; then
-            # 检查今天是否在活动日期列表中
-            HAS_ACTIVITY=$(python -c "
-import json
-from datetime import datetime
-today = '$TODAY'
-try:
-    data = json.load(open('calendar_data.json'))
-    dates = [a['date'] for a in data.get('activities', [])]
-    print('true' if today in dates else 'false')
-except:
-    print('true')  # 如果无法读取，默认执行
-            ")
+            HAS_ACTIVITY=$(python3 -c "import json; today='$TODAY'; data=json.load(open('calendar_data.json')) if True else {}; dates=[a['date'] for a in data.get('activities', [])]; print('true' if today in dates else 'false')" 2>/dev/null || echo "true")
             echo "has_activity=$HAS_ACTIVITY" >> $GITHUB_OUTPUT
           else
             echo "has_activity=true" >> $GITHUB_OUTPUT
