@@ -23,9 +23,6 @@ on:
   push:
     branches:
       - main
-    paths:
-      - '.github/workflows/mcd-auto-claim.yml'
-      - 'auto_claim.py'
 
 # 设置权限
 permissions:
@@ -85,12 +82,9 @@ jobs:
           path: calendar_data.json
           retention-days: 35
 
-  # 每天检查是否有活动并领券
+  # 每天执行领券任务
   auto-claim:
-    if: |
-      github.event.schedule == '5 16 * * *' ||
-      (github.event_name == 'workflow_dispatch' && (github.event.inputs.mode == 'claim' || github.event.inputs.mode == 'full')) ||
-      github.event_name == 'push'
+    if: github.event.schedule == '5 16 * * *' || (github.event_name == 'workflow_dispatch' && (github.event.inputs.mode == 'claim' || github.event.inputs.mode == 'full')) || github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - name: 删除旧的 artifacts
@@ -160,21 +154,7 @@ jobs:
           path: ./
         continue-on-error: true
       
-      - name: 检查今天是否有活动
-        id: check
-        run: |
-          TODAY=$(TZ='Asia/Shanghai' date +%Y-%m-%d)
-          echo "today=$TODAY"
-          
-          if [ -f calendar_data.json ]; then
-            HAS_ACTIVITY=$(python3 -c "import json; today='$TODAY'; data=json.load(open('calendar_data.json')) if True else {}; dates=[a['date'] for a in data.get('activities', [])]; print('true' if today in dates else 'false')" 2>/dev/null || echo "true")
-            echo "has_activity=$HAS_ACTIVITY" >> $GITHUB_OUTPUT
-          else
-            echo "has_activity=true" >> $GITHUB_OUTPUT
-          fi
-      
       - name: 自动领取优惠券
-        if: steps.check.outputs.has_activity == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'push'
         env:
           MCD_TOKEN: ${{ secrets.MCD_TOKEN }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -195,7 +175,6 @@ jobs:
           if-no-files-found: ignore
       
       - name: 准备 Pages 部署
-        if: steps.check.outputs.has_activity == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'push'
         run: |
           mkdir -p public
           if [ -f index.html ]; then
@@ -210,7 +189,6 @@ jobs:
           fi
       
       - name: 上传 Pages artifact
-        if: steps.check.outputs.has_activity == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'push'
         uses: actions/upload-pages-artifact@v3
         with:
           path: public
