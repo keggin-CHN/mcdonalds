@@ -11,7 +11,7 @@ import re
 import sys
 import urllib.error
 import urllib.request
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 # MCP配置
 MCP_URL = "https://mcp.mcd.cn/mcp-servers/mcd-mcp"
@@ -22,10 +22,34 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 # GitHub Pages 配置
+# 优先使用环境变量，否则从 GitHub 仓库信息自动生成
 GITHUB_PAGES_URL = os.getenv("GITHUB_PAGES_URL", "")
+GITHUB_REPOSITORY = os.getenv("GITHUB_REPOSITORY", "")  # 格式: owner/repo
+
+
+def get_github_pages_url():
+    """获取 GitHub Pages URL，优先使用环境变量，否则自动生成"""
+    if GITHUB_PAGES_URL:
+        return GITHUB_PAGES_URL
+    if GITHUB_REPOSITORY:
+        # 自动生成 GitHub Pages URL
+        # 格式: https://<owner>.github.io/<repo>/
+        parts = GITHUB_REPOSITORY.split("/")
+        if len(parts) == 2:
+            owner, repo = parts
+            return f"https://{owner}.github.io/{repo}/"
+    return ""
 
 # 数据文件路径
 CALENDAR_DATA_FILE = "calendar_data.json"
+
+# 北京时区 (UTC+8)
+BEIJING_TZ = timezone(timedelta(hours=8))
+
+
+def get_beijing_time():
+    """获取北京时间"""
+    return datetime.now(BEIJING_TZ)
 
 
 def call_mcp(token, method, params, session_id=None):
@@ -345,7 +369,7 @@ def send_telegram_message(message):
 
 def format_report(calendar_data, claim_result, my_coupons, pages_url=None):
     """格式化Telegram报告 - 简洁版"""
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now = get_beijing_time().strftime("%Y-%m-%d %H:%M:%S")
     
     report = f"🍔 *麦当劳优惠券自动领取报告*\n"
     report += f"⏰ `{now}`\n\n"
@@ -442,8 +466,8 @@ def parse_validity_short(validity):
 
 def generate_html_report(calendar_data, claim_result, my_coupons):
     """生成HTML报告 - 优化版，包含详细活动信息和完整有效期"""
-    now = datetime.now()
-    timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
+    now = get_beijing_time()
+    timestamp = now.strftime("%Y-%m-%d %H:%M:%S") + " (北京时间)"
     
     # 生成优惠券HTML - 显示完整有效期（开始-结束时间）
     coupons_html = ""
@@ -1027,7 +1051,7 @@ def html_escape(text):
 def save_calendar_data(calendar_data, server_date):
     """保存活动日历数据到JSON文件，用于后续调度"""
     data = {
-        "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "updated_at": get_beijing_time().strftime("%Y-%m-%d %H:%M:%S"),
         "server_date": server_date,
         "activities": calendar_data
     }
@@ -1055,8 +1079,8 @@ def load_calendar_data():
 
 
 def get_today_activities(calendar_data):
-    """获取今天的活动"""
-    today = datetime.now().strftime("%Y-%m-%d")
+    """获取今天的活动（使用北京时间）"""
+    today = get_beijing_time().strftime("%Y-%m-%d")
     for day_data in calendar_data:
         if day_data.get("date") == today:
             return day_data
@@ -1147,8 +1171,9 @@ def mode_fetch_calendar():
     if len(calendar_data) > 10:
         msg += f"• ...还有{len(calendar_data)-10}天\n"
     
-    if GITHUB_PAGES_URL:
-        msg += f"\n🔗 [查看详情]({GITHUB_PAGES_URL})"
+    pages_url = get_github_pages_url()
+    if pages_url:
+        msg += f"\n🔗 [查看详情]({pages_url})"
     
     send_telegram_message(msg)
     
@@ -1223,7 +1248,8 @@ def mode_auto_claim():
     
     # 推送到Telegram
     print("\n[3/3] Pushing report...")
-    report = format_report(calendar_data, claim_result, my_coupons, GITHUB_PAGES_URL)
+    pages_url = get_github_pages_url()
+    report = format_report(calendar_data, claim_result, my_coupons, pages_url)
     
     if send_telegram_message(report):
         print("[OK] Telegram message sent!")
@@ -1318,7 +1344,8 @@ def mode_full():
     
     # 推送到Telegram
     print("\n[5/5] Pushing report...")
-    report = format_report(calendar_data, claim_result, my_coupons, GITHUB_PAGES_URL)
+    pages_url = get_github_pages_url()
+    report = format_report(calendar_data, claim_result, my_coupons, pages_url)
     
     if send_telegram_message(report):
         print("[OK] Telegram message sent!")
